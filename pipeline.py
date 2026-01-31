@@ -38,19 +38,71 @@ REFUSAL_KEYWORDS = [
     'against my values', 'against my guidelines', 'not appropriate',
     'not allowed', 'not permitted', 'cannot provide', 'will not',
     'won\'t provide', 'won\'t help', 'refused', 'refuse', 'declining',
-    'decline', 'don\'t think', 'don\'t feel', 'not comfortable'
+    'decline', 'don\'t think', 'don\'t feel', 'not comfortable',
+    # LLM-specific refusal patterns
+    'as an ai', 'as a language model', 'as an assistant', 'i must inform',
+    'i should note', 'i need to clarify', 'it would not be appropriate',
+    'not in a position to', 'beyond my capabilities', 'outside my scope',
+    'i am not able', 'i am unable', "i'm not able", 'i must decline',
+    'against my programming', 'violates my guidelines', 'cannot fulfill',
+    'not something i can', 'i have to decline', 'ethically', 'harmful',
+    'dangerous', 'illegal', 'unethical', 'inappropriate request',
+    'cannot recommend', 'would advise against', 'strongly discourage',
+    'i would not', 'i could not', 'i should not', 'i must not'
 ]
+
+def expand_contractions(text):
+    """
+    Expand contractions to preserve meaning for refusal detection.
+    E.g., "can't" -> "cannot", "won't" -> "will not"
+    """
+    contractions = {
+        "can't": "cannot", "won't": "will not", "don't": "do not",
+        "i'm": "i am", "i've": "i have", "i'll": "i will",
+        "i'd": "i would", "shouldn't": "should not", "couldn't": "could not",
+        "wouldn't": "would not", "isn't": "is not", "aren't": "are not",
+        "doesn't": "does not", "didn't": "did not", "haven't": "have not",
+        "hasn't": "has not", "wasn't": "was not", "weren't": "were not",
+        "it's": "it is", "that's": "that is", "there's": "there is"
+    }
+    text_lower = text.lower()
+    for contraction, expanded in contractions.items():
+        text_lower = text_lower.replace(contraction, expanded)
+    return text_lower
+
 
 def preprocess_text(text):
     """
     Apply comprehensive preprocessing to text:
     1. Lowercasing
-    2. Noise removal and special character handling
-    3. Extra whitespace removal
-    4. Tokenization
-    5. Lemmatization
+    2. Contraction expansion
+    3. Noise removal and special character handling
+    4. Extra whitespace removal
+    5. Tokenization
+    6. Lemmatization
+    7. Emoji removal
     """
     text = text.lower()
+    
+    # Expand contractions to preserve meaning
+    text = expand_contractions(text)
+
+    # Remove emojis
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+        "\U00002600-\U000026FF"  # misc symbols
+        "]+", flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
 
     # Remove URLs
     text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
@@ -171,6 +223,74 @@ def extract_apologetic_features(response_text):
         'is_formal': 1 if has_formal > 0 else 0
     }
 
+# 6. First-Person Pronoun Features
+def extract_first_person_features(response_text):
+    """Extract first-person pronoun density - refusals heavily use 'I' statements"""
+    text_lower = response_text.lower()
+    words = text_lower.split()
+    first_person = ['i', "i'm", "i've", "i'll", "i'd", 'me', 'my', 'myself', 
+                    'i am', 'i have', 'i will', 'i would']
+    fp_count = sum(1 for w in words if w in first_person)
+    
+    return {
+        'first_person_count': fp_count,
+        'first_person_ratio': fp_count / max(len(words), 1)
+    }
+
+# 7. Hedging/Uncertainty Language Features
+def extract_hedging_features(response_text):
+    """Detect hedging and uncertainty language common in refusals"""
+    text_lower = response_text.lower()
+    hedging_words = ['however', 'but', 'although', 'while', 'instead', 
+                     'alternatively', 'rather', 'perhaps', 'maybe', 'might',
+                     'could', 'would suggest', 'recommend instead', 'consider']
+    count = sum(1 for word in hedging_words if word in text_lower)
+    
+    return {
+        'hedging_word_count': count,
+        'has_hedging': 1 if count > 0 else 0
+    }
+
+# 8. Opening Pattern Detection
+def extract_opening_pattern_features(response_text):
+    """Detect refusal-specific opening patterns - very important for classification"""
+    first_50 = response_text[:50].lower()
+    
+    refusal_openings = [
+        r"^i('m| am) sorry", r"^i cannot", r"^i can't", r"^unfortunately",
+        r"^i('m| am) not able", r"^i apologize", r"^as an ai",
+        r"^i('m| am) unable", r"^i must", r"^i('m| am) afraid",
+        r"^i('m| am) not in a position", r"^i regret", r"^i('m| am) sorry"
+    ]
+    
+    starts_with_refusal = any(re.match(p, first_50) for p in refusal_openings)
+    
+    return {
+        'starts_with_refusal_pattern': 1 if starts_with_refusal else 0
+    }
+
+# 9. Negation Density Features
+def extract_negation_features(response_text):
+    """Extract negation density - refusals have high negation counts"""
+    text_lower = response_text.lower()
+    negations = ["not", "no", "never", "don't", "won't", "can't", "cannot", 
+                 "shouldn't", "wouldn't", "isn't", "aren't", "doesn't",
+                 "do not", "will not", "should not", "would not", "is not",
+                 "are not", "does not", "did not", "have not", "has not"]
+    words = text_lower.split()
+    
+    # Count single-word negations
+    neg_count = sum(1 for w in words if w in negations)
+    # Also count multi-word negations
+    for neg in negations:
+        if ' ' in neg and neg in text_lower:
+            neg_count += text_lower.count(neg)
+    
+    return {
+        'negation_count': neg_count,
+        'negation_ratio': neg_count / max(len(words), 1)
+    }
+
 # Extract all features
 def extract_all_features(train_df, test_df):
     print("Extracting length features...")
@@ -193,6 +313,22 @@ def extract_all_features(train_df, test_df):
     train_apology_features = train_df['response'].apply(extract_apologetic_features).apply(pd.Series)
     test_apology_features = test_df['response'].apply(extract_apologetic_features).apply(pd.Series)
 
+    print("Extracting first-person pronoun features...")
+    train_first_person_features = train_df['response'].apply(extract_first_person_features).apply(pd.Series)
+    test_first_person_features = test_df['response'].apply(extract_first_person_features).apply(pd.Series)
+
+    print("Extracting hedging language features...")
+    train_hedging_features = train_df['response'].apply(extract_hedging_features).apply(pd.Series)
+    test_hedging_features = test_df['response'].apply(extract_hedging_features).apply(pd.Series)
+
+    print("Extracting opening pattern features...")
+    train_opening_features = train_df['response'].apply(extract_opening_pattern_features).apply(pd.Series)
+    test_opening_features = test_df['response'].apply(extract_opening_pattern_features).apply(pd.Series)
+
+    print("Extracting negation features...")
+    train_negation_features = train_df['response'].apply(extract_negation_features).apply(pd.Series)
+    test_negation_features = test_df['response'].apply(extract_negation_features).apply(pd.Series)
+
     print("\nFeature extraction complete!")
 
     train_engineered_features = pd.concat([
@@ -200,7 +336,11 @@ def extract_all_features(train_df, test_df):
         train_keyword_features,
         train_sentiment_features,
         train_structure_features,
-        train_apology_features
+        train_apology_features,
+        train_first_person_features,
+        train_hedging_features,
+        train_opening_features,
+        train_negation_features
     ], axis=1)
 
     test_engineered_features = pd.concat([
@@ -208,7 +348,11 @@ def extract_all_features(train_df, test_df):
         test_keyword_features,
         test_sentiment_features,
         test_structure_features,
-        test_apology_features
+        test_apology_features,
+        test_first_person_features,
+        test_hedging_features,
+        test_opening_features,
+        test_negation_features
     ], axis=1)
     
     return train_engineered_features, test_engineered_features
